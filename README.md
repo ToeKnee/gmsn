@@ -1,6 +1,10 @@
 # GMSN! SDIY Files.
 
-THC (Through Hole Clouds): Original schematic and code by Olivier Gillet (olivier@mutable-instruments.net)
+GMSN! Pure Modular Code
+
+Pure ADSR
+Pure Quantiser
+Pure Sequencer
 
 License
-Code: MIT license. Hardware: cc-by-sa-4.0 By: Rob Spencer (rob@gmsn.co.uk)
+cc-by-4.0 By: Rob Spencer (rob@gmsn.co.uk)
