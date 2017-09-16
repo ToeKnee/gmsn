@@ -4,7 +4,7 @@ GMSN Pure ADSR v20170915
 Rob Spencer 2017
 cc-by 4.0
 
-Full Open Source Documentation at gmsn.co.uk/pure-adsr including hardware files, Bill of Materials, Mouser Cart and Help Videos
+Full Open Source Documentation at https://gmsn.co.uk/pure-adsr including hardware files, Bill of Materials, Mouser Cart and Help Videos
 
 For more indepth build and general support chat, join us at the GMSN! Synth Design Slack: https://join.slack.com/t/gmsnsynthdesign/shared_invite/MjE0NzM1ODc3NDkyLTE1MDA0NTI1MTItODQ3MDM4OTdlYw
 
