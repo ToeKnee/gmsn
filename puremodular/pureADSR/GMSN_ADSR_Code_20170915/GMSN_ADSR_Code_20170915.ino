@@ -264,8 +264,11 @@ void trigButton() {
 
 //Interrupt routine for rising edge of Gate
 void gateOn() {
-  enVal = 0;
-  phase = 1;
+  if (phase == 1){
+    enVal = 1;
+  } else {
+    phase = 1;
+  }
   trapOffCount = 0;
   trapOnCount = 0;
 }
