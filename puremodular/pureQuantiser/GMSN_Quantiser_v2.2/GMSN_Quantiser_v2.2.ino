@@ -99,8 +99,8 @@ void setup() {
   digitalWrite(trig, LOW);
 
   for (int k = 0; k <= 12; k++) {
-    //notes[k] = EEPROM[k];
-    notes[k] = 1;
+    notes[k] = EEPROM[k];
+    //notes[k] = 1;
   }
 }
 
