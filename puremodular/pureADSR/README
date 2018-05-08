@@ -4,7 +4,7 @@ cc-by 4.0
 
 Full Open Source Documentation at https://gmsn.co.uk/pure-adsr including hardware files, Bill of Materials, Mouser Cart and Help Videos
 
-For more indepth build and general support chat, join us at the GMSN! Synth Design Slack: https://join.slack.com/t/gmsnsynthdesign/shared_invite/MjE0NzM1ODc3NDkyLTE1MDA0NTI1MTItODQ3MDM4OTdlYw
+For more indepth build and general support chat, join us at the GMSN! Forum: https://forum.gmsn.co.uk
 
 The main loop() loops round continuously, everytime it goes round it calculates the current envelope value and writes it to the DAC.
 There's some logic to figure out what Mode it's in and what phase it's in, which tell's it whether it should be calculating an attack value, etc.
