@@ -1,119 +1,428 @@
+/*
+  GMSN! Pure Quantiser v3
+  08th May 2018
+  cc-by 4.0
+  Rob Spencer
+
+  This version has:
+  
+    Solid lights, no flashing during playing.
+    Remebers selection when power cycled.
+    CV Thru, CV goes straight through when no LEDs selected, and LEDs display VU meter type behaviour, good for fault finding.
+  
+*/
+
 #include "SPI.h"
+#include <EEPROM.h>
 
-boolean trig = false;
-unsigned long pMillis;
-int outputPre = 0;
+//Setup LED Pin Varibles
+const byte LR_0 = A3;
+const byte LR_1 = A4;
+const byte LR_2 = A5;
+const byte LR_3 = 7;
+const byte LC_0 = A0;
+const byte LC_1 = A1;
+const byte LC_2 = A2;
 
-int equalTempered[13] =
-{
-  0, 68, 136, 205, 273, 341, 409, 478, 546, 614, 682, 751, 819
-};
+//Setup Button Pin Variable
+const byte BC_0 = 2;
+const byte BC_1 = 1;
+const byte BC_2 = 0;
+const byte BR_0 = 3;
+const byte BR_1 = 4;
+const byte BR_2 = 5;
+const byte BR_3 = 6;
+
+//Setup variable for the buttons, LEDs and temperament
+int note;
+int notes[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+int equalTempered[13] = {0, 68, 136, 205, 273, 341, 409, 478, 546, 614, 682, 751, 819};
 
 
-boolean flag[12] =
-{
-  true, true, true, true,
-  true, true, true, true,
-  true, true, true, true,
-};
+//Setup program control variables
+int mode = 0;
+int i = 1;
 
-byte counter;
+//Setup switch debounce variables
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 500;
+int buttonState;
+int lastButtonState[13] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-byte LEDs[2] =
-{
-  B11111111, B00001111,
-};
+//Setup SPI Bus Pin Variables
+const byte csADC = 9;
+const byte csDAC = 10;
 
-byte frames[12] =
-{
-
-};
-
-int i = 0;
-int dacoutcs = 10;
-int dacincs = 9;
-int trigout = 8;
-int lr3 = 7;
-int br0 = 3;
-int br1 = 4;
-int br2 = 5;
-int br3 = 6;
+//Setup CV and Trigger Pin Variables
+int cvIn;
+int cvOut;
+int lastCvOut;
+unsigned long lastCvChange;
+int triggerOnTime = 10;
+const byte trig = 8;
 
 void setup() {
+
+  //Setup LED Pins
+  pinMode(LR_0, OUTPUT);
+  pinMode(LR_1, OUTPUT);
+  pinMode(LR_2, OUTPUT);
+  pinMode(LR_3, OUTPUT);
+  pinMode(LC_0, OUTPUT);
+  pinMode(LC_1, OUTPUT);
+  pinMode(LC_2, OUTPUT);
+
+  digitalWrite(LR_0, HIGH);
+  digitalWrite(LR_1, HIGH);
+  digitalWrite(LR_2, HIGH);
+  digitalWrite(LR_3, HIGH);
+  digitalWrite(LC_0, LOW);
+  digitalWrite(LC_1, LOW);
+  digitalWrite(LC_2, LOW);
+
+  //Setup Button Pins
+  pinMode(BC_0, OUTPUT);
+  pinMode(BC_1, OUTPUT);
+  pinMode(BC_2, OUTPUT);
+  pinMode(BR_0, INPUT);
+  pinMode(BR_1, INPUT);
+  pinMode(BR_2, INPUT);
+  pinMode(BR_3, INPUT);
+
+  digitalWrite(BC_0, LOW);
+  digitalWrite(BC_1, LOW);
+  digitalWrite(BC_2, LOW);
+
+  //Setup SPI Chip Select Pins
+  pinMode(csADC, OUTPUT);
+  pinMode(csDAC, OUTPUT);
+
+  digitalWrite(csADC, HIGH);
+  digitalWrite(csDAC, HIGH);
   SPI.begin();
-  DDRC = B00111111;
-  //pinMode(7, OUTPUT);
-  //DAC CS
-  pinMode(dacoutcs, OUTPUT);
-  pinMode(dacincs, OUTPUT);
-  digitalWrite(dacincs, HIGH);
-  pinMode(trigout, OUTPUT);
 
-  DDRD = B10000111;
+  //Setup Trigger Pin
+  pinMode(trig, OUTPUT);
+  digitalWrite(trig, LOW);
 
-  PORTC = B110001;
-  digitalWrite(lr3, HIGH);
+  //Read last saved notes from EEPROM
+  for (int k = 0; k <= 12; k++) {
+    if (EEPROM[k] == 255) {
+      notes[k] = 0;
+    } else {
+      notes[k] = EEPROM[k];
+    }
+  }
 
 }
 
 void loop() {
 
-  //Read DAC and quantise it to equal temp
-  int output = quantizeST(DAC_read(1));
+  //The main loop() is made of two part.
+  // 1) Button Management. Each loop through reads and lights one of the 12 buttons.
+  // 2) CV Management. Each loop reads the CV In, then depending on the mode, will either Quantiser the CV and look after the Trigger, or will pass the CV straight through with no trigger.
 
-  //Check if output value has changed
-  if (output != outputPre) {
-    outputPre = output;
-    trig = true;
-    pMillis = millis();
+
+  //1) Button Management
+  
+  //Read Buttons to see if they are being pressed in this cycle. As the program loops round it will check if a button us currently being pressed and turn on the relevant flag within the notes array.
+  readNoteButton(i);
+
+  //If the flag is set, light the relevant button.
+  if (notes[i] == 1) {
+    writeLED(i);
+  } else {
+    writeLED(0);
   }
 
-  //If no LEDs lit, output 0;
-  if (LEDs[0] + LEDs[1] == 0) {
-    dacWrite(0);
+  //Increment the counter so on the next loop we'll read and light the next LED.
+  if (i == 12) {
+    i = 0;
+  } else {
+    i++;
+  }
+
+  //This delay just helps with the brightness of the LEDs. If it wasn't there you wouldn't notice the accents.
+  delay(1);
+
+
+  //2) CV Management
+
+  //Read CV In
+  cvIn = adcRead(1);
+
+  //Check all the note flags and if none are set, we're not quantising, mode=0  
+  mode = 0;
+  for (int j = 1; j <= 12; j++) {
+    mode = mode + notes[j];
+  }
+
+  //If mode=0, just outout the input and flash the leds like a VU Meter. This is useful for fault finding. If no LEDs light, then issue is with the input ADC. If LEDs light, but no CV Out, issue is with output DAC.
+  if (mode == 0) {
+    cvOut = cvIn >> 1;
+    dacWrite(cvOut);
+    vuMeter();
   } else {
 
-    //Else output CV
-    dacWrite(output);
-  }
+    //If not in mode=0, Quantise CV
+    quantiseCV(cvIn);
+    dacWrite(cvOut);
 
-  //If output value changed, write trigger out
-  if (trig) {
-    PORTB  |= (1);
-    if (millis() - pMillis >= 15) {
-      PORTB  &= ~(1);
-      trig = false;
+    //CV Out has changed, i.e. we've changed notes, then set the trigger out high.
+    if (lastCvOut != cvOut) {
+      digitalWrite(trig, HIGH);
+      lastCvOut = cvOut;
+      lastCvChange = millis();
+    } else if ((millis() - lastCvChange) > triggerOnTime) {
+      digitalWrite(trig, LOW);
     }
   }
 
-  //PORTB ^= (1);
-  //delay(500);
-
-  /*
-    i++;
-    if(i > 4095){
-    i = 0;
-    }
-    delay(1);
-  */
-  frame(counter);
-  buttonRead(counter);
-  counter++;
-  if (counter > 12) {
-    counter = 0;
-  }
+  
 }
 
 
+void readNoteButton(byte button) {
+  switch (button) {
+    case 1:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_2, HIGH);
+      note = digitalRead(BR_0);
+      digitalWrite(BC_2, LOW);
+      break;
+
+    case 2:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_2, HIGH);
+      note = digitalRead(BR_1);
+      digitalWrite(BC_2, LOW);
+      break;
+
+    case 3:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_2, HIGH);
+      note = digitalRead(BR_2);
+      digitalWrite(BC_2, LOW);
+      break;
+
+    case 4:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_2, HIGH);
+      note = digitalRead(BR_3);
+      digitalWrite(BC_2, LOW);
+      break;
+
+    case 5:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_1, HIGH);
+      note = digitalRead(BR_0);
+      digitalWrite(BC_1, LOW);
+      break;
+
+    case 6:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_1, HIGH);
+      note = digitalRead(BR_1);
+      digitalWrite(BC_1, LOW);
+      break;
+
+    case 7:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_1, HIGH);
+      note = digitalRead(BR_2);
+      digitalWrite(BC_1, LOW);
+      break;
+
+    case 8:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_1, HIGH);
+      note = digitalRead(BR_3);
+      digitalWrite(BC_1, LOW);
+      break;
+
+    case 9:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_0, HIGH);
+      note = digitalRead(BR_0);
+      digitalWrite(BC_0, LOW);
+      break;
+
+    case 10:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_0, HIGH);
+      note = digitalRead(BR_1);
+      digitalWrite(BC_0, LOW);
+      break;
+
+    case 11:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_0, HIGH);
+      note = digitalRead(BR_2);
+      digitalWrite(BC_0, LOW);
+      break;
+
+    case 12:
+      //Turn on BC_0 and read BR_0
+      digitalWrite(BC_0, HIGH);
+      note = digitalRead(BR_3);
+      digitalWrite(BC_0, LOW);
+      break;
+  }
+
+  //Debounce and toggle
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+
+    if (note != buttonState) {
+      buttonState = note;
+      if (buttonState == HIGH) {
+        notes[button] = !notes[button];
+        EEPROM[button] = notes[button];
+        lastDebounceTime = millis();
+      }
+    }
+  }
+  lastButtonState[button] = notes[button];
+
+}
+
+void writeLED(byte LED) {
+  switch (LED) {
+    case 0:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, LOW);
+      break;
+
+    case 1:
+      digitalWrite(LR_0, LOW);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, HIGH);
+      break;
+
+    case 2:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, LOW);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, HIGH);
+      break;
+
+    case 3:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, LOW);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, HIGH);
+      break;
+
+    case 4:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, LOW);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, HIGH);
+      break;
+
+    case 5:
+      digitalWrite(LR_0, LOW);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, HIGH);
+      digitalWrite(LC_2, LOW);
+      break;
+
+    case 6:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, LOW);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, HIGH);
+      digitalWrite(LC_2, LOW);
+      break;
+
+    case 7:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, LOW);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, HIGH);
+      digitalWrite(LC_2, LOW);
+      break;
+
+    case 8:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, LOW);
+      digitalWrite(LC_0, LOW);
+      digitalWrite(LC_1, HIGH);
+      digitalWrite(LC_2, LOW);
+      break;
+
+    case 9:
+      digitalWrite(LR_0, LOW);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, HIGH);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, LOW);
+      break;
+
+    case 10:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, LOW);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, HIGH);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, LOW);
+      break;
+
+    case 11:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, LOW);
+      digitalWrite(LR_3, HIGH);
+      digitalWrite(LC_0, HIGH);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, LOW);
+      break;
+
+    case 12:
+      digitalWrite(LR_0, HIGH);
+      digitalWrite(LR_1, HIGH);
+      digitalWrite(LR_2, HIGH);
+      digitalWrite(LR_3, LOW);
+      digitalWrite(LC_0, HIGH);
+      digitalWrite(LC_1, LOW);
+      digitalWrite(LC_2, LOW);
+      break;
+  }
+}
 
 void dacWrite(int value) {
 
-  //MCP4921 Chip Select active LOW
-  PORTB &= ~(1 << 2);
-  //PORTB = PORTB & B11111011;
-  //PORTB = PORTB | B00000000;
-
-  //set top 4 bits of value integer to data variable
+  digitalWrite(csDAC, LOW);
   byte data = value >> 8;
   data = data & B00001111;
   data = data | B00110000;
@@ -122,413 +431,48 @@ void dacWrite(int value) {
   data = value;
   SPI.transfer(data);
 
-  //MCP4921 Chip Select reset High
-  PORTB |= (1 << 2);
-  //PORTB = PORTB & B11111011;
-  //PORTB = PORTB | B00000100;
-
+  digitalWrite(csDAC, HIGH);
 }
 
-int DAC_read( byte channel ) {
+int adcRead(byte channel) {
+
   byte commandbits = B00001101;          //command bits - 0000, start, mode, chn, MSBF
   unsigned int b1 = 0;                   // get the return var's ready
   unsigned int b2 = 0;
   commandbits |= ((channel - 1) << 1);   // update the command bit to select either ch 1 or 2
-  //digitalWrite(cs, LOW);                 // select the MCP3202
-  PORTB &= ~(1 << 1);
+  digitalWrite(csADC, LOW);
   SPI.transfer(commandbits);             // send out the command bits
   const int hi = SPI.transfer(b1);       // read back the result high byte
   const int lo = SPI.transfer(b2);       // then the low byte
-  //digitalWrite(cs, HIGH);                // let the DAC go, we'done
-  PORTB |= (1 << 1);
+  digitalWrite(csADC, HIGH);
   b1 = lo + (hi << 8);                   // assemble the two bytes into a word
-  return (b1 >> 4);                      // We have got a 12bit answer but strip LSB's if
+  //return b1;
+  return (b1 >> 2);                      // We have got a 12bit answer but strip LSB's if
   // required >>4 ==10 bit (0->1024), >>2 ==12bit (0->4096)
 }
 
+int quantiseCV(int cvIn) {
 
-void frame(byte frameCount) {
+  int octave = cvIn / 819;
+  int vOct = octave * 819;
+  int vOffset = 0;
 
-  //Read individual BITs from LED arrays. 1 = LED lit = state true
-  boolean state = false;
-  //led's C - G
-  if (frameCount < 8) {
-    if (bitRead(LEDs[0], frameCount) == 1) {
-      state = true;
-
+  for (int index = 1; index <= 12; index ++) {
+    if (notes[index] == 1 && (cvIn - vOct) > index * 63) {
+      vOffset = (index * 63) - 63;
+      cvOut = vOct + vOffset;
+      //writeLED(index);
+      cvOut = cvOut >> 1;
     }
   }
-  //led's G# - B
-  else {
-    if (bitRead(LEDs[1], frameCount - 8) == 1) {
-      state = true;
-    }
-  }
-
-  //If no LEDs are lit, don't light any
-  if (!state) {
-    PORTC = B00000000;
-    PORTD &= ~(1 << 7);
-  }
-
-  //else state is true, and framecounter is the LED to light.
-  else {
-    //C
-    if (frameCount == 0) {
-      PORTC = B00110100;
-      PORTD |= (1 << 7);
-    }
-    //C#
-    else if (frameCount == 1) {
-
-      PORTC = B00101100;
-      PORTD |= (1 << 7);
-    }
-    //D
-    else if (frameCount == 2) {
-      PORTC = B00011100;
-      PORTD |= (1 << 7);
-    }
-    //D#
-    else if (frameCount == 3) {
-      PORTC = B00111100;
-      PORTD &= ~(1 << 7);
-    }
-    //E
-    else if (frameCount == 4) {
-      PORTC = B00110010;
-      PORTD |= (1 << 7);
-    }
-    //F
-    else if (frameCount == 5) {
-      PORTC = B00101010;
-      PORTD |= (1 << 7);
-    }
-    //F#
-    else if (frameCount == 6) {
-      PORTC = B00011010;
-      PORTD |= (1 << 7);
-    }
-    //G
-    else if (frameCount == 7) {
-      PORTC = B00111010;
-      PORTD &= ~(1 << 7);
-    }
-    //G#
-    else if (frameCount == 8) {
-      PORTC = B00110001;
-      PORTD |= (1 << 7);
-    }
-    //A
-    else if (frameCount == 9) {
-      PORTC = B00101001;
-      PORTD |= (1 << 7);
-    }
-    //A#
-    else if (frameCount == 10) {
-      PORTC = B00011001;
-      PORTD |= (1 << 7);
-    }
-    //B
-    else if (frameCount == 11) {
-      PORTC = B00111001;
-      PORTD &= ~(1 << 7);
-    }
-  }
-
 
 }
 
-
-
-void buttonRead(byte count) {
-
-  //
-  //C, C#, D, D#
-  if (count < 4) {
-    //Turn on BC0 so we can read the row
-    PORTD = PORTD & B11111000;
-    PORTD = PORTD | B00000001;
-
-
-    if (count == 0) {
-      //Check the current state of the button and toggle if pressed
-      if (digitalRead(br0) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[0] ^= (1 << count);
-
-
-      }
-      if (digitalRead(br0) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-      //If LED lit set note offset in equalTempered array, else remove the offset
-      if (bitRead(LEDs[0], count) == 1) {
-        equalTempered[count] = 0;
-      }
-      else {
-        equalTempered[count] = equalTempered[11];
-      }
-
-    }
-
-    else if (count == 1) {
-      if (digitalRead(br1) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[0] ^= (1 << count);
-
-
-
-      }
-      if (digitalRead(br1) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[0], count) == 1) {
-        equalTempered[count] = 68;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-
-    else if (count == 2) {
-      if (digitalRead(br2) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[0] ^= (1 << count);
-
-
-      }
-      if (digitalRead(br2) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[0], count) == 1) {
-        equalTempered[count] = 136;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-
-    else if (count == 3) {
-      if (digitalRead(br3) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[0] ^= (1 << count);
-
-
-
-      }
-      if (digitalRead(br3) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[0], count) == 1) {
-        equalTempered[count] = 205;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
+void vuMeter() {
+  for (int l = 1; l <= 12; l++) {
+    if (cvIn > (300 * l)) {
+      writeLED(l);
     }
   }
-
-  //G#, A, A#, B
-  else if (count > 7) {
-    PORTD = PORTD & B11111000;
-    PORTD = PORTD | B00000100;
-
-    if (count == 8) {
-      if (digitalRead(br0) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[1] ^= (1 << count - 8);
-
-      }
-      if (digitalRead(br0) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[1], count - 8) == 1) {
-        equalTempered[count] = 546;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-
-    else if (count == 9) {
-      if (digitalRead(br1) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[1] ^= (1 << count - 8);
-
-      }
-      if (digitalRead(br1) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[1], count - 8) == 1) {
-        equalTempered[count] = 614;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-
-    else if (count == 10) {
-      if (digitalRead(br2) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[1] ^= (1 << count - 8);
-
-      }
-      if (digitalRead(br2) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[1], count - 8) == 1) {
-        equalTempered[count] = 682;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-
-    else if (count == 11) {
-      if (digitalRead(br3) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[1] ^= (1 << count - 8);
-
-      }
-      if (digitalRead(br3) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[1], count - 8) == 1) {
-        equalTempered[count] = 751;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-  }
-
-  //E, F, F#, G
-  else {
-    PORTD = PORTD & B11111000;
-    PORTD = PORTD | B00000010;
-
-    if (count == 4) {
-      if (digitalRead(br0) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[0] ^= (1 << count);
-
-      }
-      if (digitalRead(br0) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[0], count) == 1) {
-        equalTempered[count] = 273;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-
-    else if (count == 5) {
-      if (digitalRead(br1) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[0] ^= (1 << count);
-
-      }
-      if (digitalRead(br1) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[0], count) == 1) {
-        equalTempered[count] = 341;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-
-    else if (count == 6) {
-      if (digitalRead(br2) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[0] ^= (1 << count);
-
-      }
-      if (digitalRead(br2) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[0], count) == 1) {
-        equalTempered[count] = 409;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-
-    else if (count == 7) {
-      if (digitalRead(br3) == HIGH && flag[count]) {
-        flag[count] = false;
-        LEDs[0] ^= (1 << count);
-
-      }
-      if (digitalRead(br3) == LOW && !flag[count]) {
-        flag[count] = true;
-      }
-
-
-      if (bitRead(LEDs[0], count) == 1) {
-        equalTempered[count] = 478;
-      }
-      else {
-        equalTempered[count] = equalTempered[count - 1];
-      }
-    }
-  }
-
-
 }
-
-
-int quantizeST(int val){
-  int controlVoltage;
-  controlVoltage = 819 * (val/205);
-  controlVoltage += equalTempered[(val%205)/17];
-
-  //limiter to max Value
-  /*
-  if(val == 1023){
-    controlVoltage = 4095;
-  }
-  */
-  return controlVoltage >> 1;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
