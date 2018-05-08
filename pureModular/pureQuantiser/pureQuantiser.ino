@@ -1,5 +1,5 @@
 /*
-  GMSN! Pure Quantiser v3
+  GMSN! Pure Quantiser v2.4
   08th May 2018
   cc-by 4.0
   Rob Spencer

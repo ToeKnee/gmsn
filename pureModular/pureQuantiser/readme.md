@@ -1,4 +1,4 @@
-GMSN Pure Quantiser v3
+GMSN Pure Quantiser v2.4
 Rob Spencer 2018
 cc-by 4.0
 
