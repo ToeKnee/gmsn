@@ -13,4 +13,11 @@ This Github Repo contains the code for the digital modules. All of which are bas
 
 There's also the GMSN! Youtube Channel for loads of great tips on getting started... https://www.youtube.com/channel/UCwt7YFF0vUFElzAl-tT9rXA
 
+All designs are released under cc-by 4.0 license.
+
+SA - Share & Adapt.
+BY - Credit where credit is due.
+For any purpose including Commercial and Group Buys.
+No pressure to share design files
+
 Time to build synths!
